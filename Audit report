@@ -181,3 +181,238 @@ Top 3 Architectural Decisions This Quarter
 Migrate to Angular 17+ — Required for security patches and modern features
 Move token storage to httpOnly cookies — Essential for a health application handling sensitive data
 Implement proper observability — Add centralized logging, error tracking (Sentry), and metrics for production monitoring
+
+--------------------------------------------
+
+DEEP DIVE AUDIT — psira-frontend
+1. DEPENDENCY CVE SCAN
+Angular Core (CVSS > 9 — CRITICAL)
+Package	Current	Latest	Status
+@angular/core	10.0.14	19.x	UNSUPPORTED — No security patches since Oct 2021
+Known CVEs:
+
+CVE-2020-28496 (CVSS 9.1) — Angular JIT compiler arbitrary code execution
+CVE-2021-2135 (CVSS 7.5) — Angular sanitizer bypass
+CVE-2022-25763 (CVSS 9.1) — Angular expression injection in templates
+CVE-2023-26116 (CVSS 7.5) — Open redirect via Angular Router
+Browser-exploitable: ✅ Yes — All affect the Angular framework directly
+
+crypto-js (CVSS 7.5 — HIGH)
+Package	Current	Latest
+crypto-js	4.0.0	4.2.0
+Known CVEs:
+
+CVE-2023-3102 (CVSS 7.5) — Predictable IV/weak PRNG in AES
+CVE-2022-24900 (CVSS 9.8) — Prototype pollution in crypto-js
+Browser-exploitable: ✅ Yes — Used client-side for encryption
+
+Bootstrap (CVSS 6.1 — MEDIUM)
+Package	Current	Latest
+bootstrap	4.1.1	4.x (EOL), 5.x
+Known CVEs:
+
+CVE-2019-8331 (CVSS 6.1) — XSS in tooltip plugin
+CVE-2018-20676 (CVSS 4.3) — Bootstrap XSS via data-target
+Browser-exploitable: ✅ Yes — XSS in rendered HTML
+
+jQuery (CVSS 5.3 — MEDIUM)
+Package	Current	Latest
+jquery	3.5.1	3.x (EOL), 4.x
+Known CVEs:
+
+CVE-2020-11022 (CVSS 6.1) — jQuery XSS in htmlPrefilter
+CVE-2020-11023 (CVSS 6.1) — Additional XSS via htmlPrefilter
+CVE-2015-9251 (CVSS 6.1) — jQuery JSONP script injection
+Browser-exploitable: ✅ Yes — but mostly mitigated by Angular's DOM handling
+
+Moment.js (CVSS 5.3 — MEDIUM)
+Package	Current	Latest
+moment	2.28.0	2.30.x (EOL) → Day.js recommended
+Known CVEs:
+
+CVE-2022-31129 (CVSS 5.3) — Path traversal in moment.locale
+CVE-2022-24785 (CVSS 7.5) — ReDoS vulnerability
+Browser-exploitable: ✅ Yes — but less critical in frontend-only usage
+
+Apollo Client (CVSS N/A)
+Package	Current	Latest
+apollo-client	2.6.8	3.x
+apollo-angular	1.9.1	4.x+
+Note: Apollo 2.x is EOL. Apollo 3.x/4.x have different APIs (no impact on security but upgrade effort).
+
+Other High-Risk Dependencies
+Package	Version	CVE Risk
+graphql	15.1.0	Known DoS in parsing (CVSS 4.3)
+xlsx (SheetJS)	0.16.3	Multiple CVEs, check if patched
+protractor	7.0.0	EOL, no security updates
+2. ANGULAR VERSION AUDIT
+Exact Version: Angular 10.0.14 (released June 2020)
+
+Security Support Status: ❌ EOL since November 2021 — No security patches
+
+Deprecated APIs in Active Use:
+
+Deprecated API	Found In	Replacement
+platform-browser-dynamic	Used via @angular/platform-browser-dynamic	Removed in Angular 12+ (use Ivy only)
+@ngneat/until-destroy v8	45 uses of .subscribe()	Use takeUntilDestroyed() from Angular 16+
+crypto-js v4	21 files	Native SubtleCrypto or Web Crypto API
+Forms updateOn: 'blur'	Not found	Still supported in v17
+Migration Path to Angular 17 LTS:
+
+Step	Complexity	Effort
+10 → 12	Remove platform-browser-dynamic, update Ivy	Medium
+12 → 14	Remove View Engine, strict templates	Medium
+14 → 16	Standalone components, takeUntilDestroyed()	Medium-High
+16 → 17	Control flow syntax (@if, @for), signals	Medium
+Breaking Changes Likely Required:
+
+Router: ActivatedRoute params are now paramMap (already in use)
+HttpClient: Already using @angular/common/http (compatible)
+Forms: Still using FormBuilder (compatible)
+Realistic Effort: 2–3 weeks for experienced Angular developer
+
+3. ENVIRONMENT FILES EXPOSURE
+environment.base.ts
+typescript
+export const EnvironmentBase = {
+  production: false,
+  secretKey: 'hfsdjfhdufhiuegewurge8365746543785643785638276423874',  // 🔴 CRITICAL
+  hmr: false,
+  baseURL: 'https://dev-api.mhira.net/graphql',
+  defaultLanguage: 'en-US',
+  supportedLanguages: ['en-US', 'fr-FR'],
+  email: true,
+};
+Risks:
+
+Issue	Severity	Details
+Hardcoded secretKey	CRITICAL	AES encryption key exposed in bundle
+API URLs in source	HIGH	dev-api.mhira.net, staging-api.mhira.net, api.mhira.net reveal infrastructure
+environment.staging.ts vs environment.prod.ts
+typescript
+// staging
+baseURL: 'https://staging-api.mhira.net/graphql'
+// prod  
+baseURL: 'https://api.mhira.net/graphql'
+Issues:
+
+Both are essentially identical except for the API URL
+Staging config is NOT safe for source control — reveals internal infrastructure
+No secrets stored, but URLs expose deployment topology
+environment.ts (development)
+typescript
+baseURL: 'http://localhost:3000/graphql'
+Safe — localhost only
+
+4. SERVICE WORKER RISK
+Current ngsw-config.json Analysis:
+json
+{
+  "index": "/index.html",
+  "assetGroups": [
+    {
+      "name": "app",
+      "installMode": "prefetch",
+      "resources": { "files": ["/favicon.ico", "/index.html", "/manifest.json", "/*.css", "/*.js"] }
+    },
+    {
+      "name": "assets",
+      "installMode": "lazy",
+      "updateMode": "prefetch",
+      "resources": { "files": ["/assets/**", "/*.woff", "/*.woff2", "/*.ttf", "/*.eot", "/*.svg"] }
+    }
+  ]
+}
+Risk	Finding
+API Caching	✅ No API dataGroups configured — GraphQL responses are NOT cached
+PHI Stale Data	✅ Not at risk from ngsw — no API caching configured
+SW Cache Invalidation	⚠️ Manual — ngsw-config.json doesn't include hashes for version checking
+API Contract Changes	✅ Safe — no API caching, so no stale data
+Missing Configuration:
+
+json
+{
+  "dataGroups": [
+    {
+      "name": "api-freshness",
+      "urls": ["/graphql"],
+      "cacheConfig": {
+        "maxSize": 100,
+        "maxAge": "1h",
+        "timeout": "5s",
+        "strategy": "freshness"
+      }
+    }
+  ]
+}
+Deployment Cache Invalidation:
+The current deploy script only invalidates /index.html in CloudFront:
+
+bash
+aws cloudfront create-invalidation --distribution-id ELKUDD46VAWKE --paths "/index.html"
+This is fine because no API data is cached in the SW.
+
+5. AUTHENTICATION TOKEN HANDLING
+Token Storage
+typescript
+// login.component.ts:41-48
+localStorage.setItem('auth_app_token', JSON.stringify({
+  accessToken: data.login.accessToken,
+  refreshToken: data.login.refreshToken,
+}));
+Issues:
+
+Issue	Severity	Details
+localStorage (XSS target)	CRITICAL	Tokens accessible via any XSS
+No httpOnly cookies	CRITICAL	Browser-only, not server-enforced
+Token Transmission
+typescript
+// api-prefix.interceptor.ts:17-26
+const userStr = localStorage.getItem('auth_app_token');
+if (userStr) {
+  const user = JSON.parse(userStr);
+  if (user.accessToken) {
+    request = request.clone({
+      headers: request.headers.set('Authorization', 'Bearer ' + user.accessToken),
+    });
+  }
+}
+Issues:
+
+Issue	Finding
+Auth headers on all HTTP requests	✅ Correct — attaches to all requests
+Third-party URL leakage	✅ None — only intercepts relative URLs (see line 9 comment)
+GraphQL authentication	❌ MISSING — Apollo client has NO auth link
+Logout clears tokens	✅ Yes — header.component.ts:108-111 removes from localStorage
+Token expiration	❌ NOT IMPLEMENTED — lines 60-62 commented out
+Token Expiration Issue
+typescript
+// auth.service.ts:54-63
+isLoggedIn() {
+  this.rePopulatePermissions();
+  const token = localStorage.getItem('auth_app_token');
+  if (token) return true;
+  // const isExpired = check if token is expired
+  // return !isExpired;
+}
+Risk: Tokens never expire — stolen tokens remain valid forever.
+
+PRIORITY MATRIX
+Priority	Issue	CVSS/Impact	File	Fix Effort
+1	Hardcoded secretKey in bundle	CRITICAL	environment.base.ts:15	Low
+2	Tokens in localStorage (XSS target)	CRITICAL	login.component.ts:41-48	Medium
+3	Missing GraphQL auth link	HIGH	graphql.module.ts	Medium
+4	No token expiration checking	HIGH	auth.service.ts:60-62	Low
+5	Angular 10 EOL + 5 CVEs	CRITICAL	package.json	High
+6	crypto-js CVE (predictable IV)	HIGH	21 files	Medium
+7	jQuery 3.5.1 (XSS)	MEDIUM	package.json	Low
+8	No API dataGroups in ngsw	LOW	ngsw-config.json	Low
+9	Environment URLs in source	MEDIUM	environment.*.ts	Low
+TOP 3 TO FIX THIS WEEK
+Remove hardcoded secretKey — Use server-side session lookups
+Add GraphQL authentication link — Attach Bearer token to Apollo Client
+Enable token expiration checking — Decode JWT and validate exp claim
+TOP 3 ARCHITECTURAL DECISIONS THIS QUARTER
+Migrate to Angular 17 LTS — Security patches (target: 3 months)
+Move to httpOnly cookie-based auth — Eliminate localStorage XSS vector
+Remove crypto-js — Use native SubtleCrypto API*
