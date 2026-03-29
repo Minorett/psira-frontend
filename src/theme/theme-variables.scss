@@ -1,5 +1,6 @@
 /*
  * Application global variables.
+ * EIPSI Forms Palette
  */
 
 // Set Font Awesome font path
@@ -17,26 +18,26 @@ $fa-font-path: "~@fortawesome/fontawesome-free/webfonts";
 
 $white: #fff;
 $gray-100: #f8f9fa;
-$gray-200: #e9ecef;
-$gray-300: #dee2e6;
-$gray-400: #ced4da;
-$gray-500: #adb5bd;
-$gray-600: #868e96;
-$gray-700: #495057;
-$gray-800: #343a40;
-$gray-900: #212529;
+$gray-200: #f1f5f9;
+$gray-300: #e2e8f0;
+$gray-400: #cbd5e0;
+$gray-500: #94a3b8;
+$gray-600: #64748b;
+$gray-700: #475569;
+$gray-800: #334155;
+$gray-900: #1e293b;
 $black: #000;
 
-$blue: #0073dd;
+$blue: #3B6CAA;
 $indigo: #6610f2;
 $purple: #6f42c1;
 $pink: #e83e8c;
-$red: #dc3545;
+$red: #800000;
 $orange: #fd7e14;
 $yellow: #ffc107;
-$green: #28a745;
-$teal: #20c997;
-$cyan: #17a2b8;
+$green: #008080;
+$teal: #008080;
+$cyan: #3B6CAA;
 
 $theme-colors: (
   primary: $blue,
