@@ -1,0 +1,325 @@
+# PSIRA — ANÁLISIS CROSS-REPO
+**psira-docker · psira-frontend · psira-backend · rama `develop`**  
+Marzo 2026 · Confidencial
+
+---
+
+## ⚠ PREGUNTA INICIAL: ¿Ya fue comprometido?
+
+Antes de analizar vulnerabilidades, la pregunta operacional correcta es si el sistema ya fue comprometido. La respuesta honesta: **no hay forma de determinarlo.**
+
+Evidencia de ausencia de observabilidad:
+
+- `getFullPublicAssessment` no genera logs de acceso — no pasa por autenticación.
+- `JwtStrategy` no loguea validaciones fallidas de JWT.
+- Múltiples `catch` blocks en el backend swallean errores sin logging.
+- Redis sin autenticación — accesos directos a sesiones son invisibles.
+- RStudio en `:8787` no pasa por Caddy — sin access logs centralizados.
+
+Si hubo acceso no autorizado en los últimos meses, no existe artefacto forense que lo confirme ni lo descarte.
+
+> **Acción previa a cualquier remediación:** Activar logging estructurado con request IDs en NestJS. Habilitar query logs en PostgreSQL y MongoDB. Centralizar access logs de Caddy. Sin esto, cada fix implementado es parcialmente ciego.
+
+---
+
+## 1. ENDPOINT PÚBLICO SIN AUTENTICACIÓN
+
+**`SEVERITY: CRITICAL`**  
+**Repos:** `psira-backend` + `psira-docker`
+
+`PublicAssessmentResolver` no tiene `@UseGuards()`. Apollo Server 2.x tiene GraphQL introspection habilitado por defecto — el schema completo es público y cualquier herramienta de fuzzing enumera este endpoint sin conocimiento previo del sistema.
+
+**Código — `src/modules/assessment/resolvers/public.assesment.resolver.ts:10-15`:**
+
+```typescript
+// SIN @UseGuards() — accesible sin token desde cualquier IP
+@Query(() => FullPublicAssessment)
+async getFullPublicAssessment(
+  @Args('uuid') uuid: string,
+): Promise<FullPublicAssessment> {
+  return this.assessmentService.getFullPublicAssessment(uuid);
+}
+```
+
+**Query explotable sin credenciales:**
+
+```graphql
+query {
+  getFullPublicAssessment(uuid: "any-uuid") {
+    questionnaireAssessment {
+      answers {
+        textValue        # respuestas libres — notas clínicas
+        numberValue      # escalas — scores de depresión
+        booleanValue     # screening — ideación suicida
+        multipleChoiceValue  # diagnósticos seleccionados
+      }
+    }
+  }
+}
+```
+
+**Vector cross-repo no documentado en el audit individual:** los UUIDs son distribuidos por `SendMailService.checkAssessmentEmails()` en emails a pacientes. Quedan en servidores de correo corporativos, backups de Gmail, logs de proveedores SMTP. El UUID no es un secreto operacional — es un identificador con distribución amplia.
+
+**Fix:** `@UseGuards(GqlAuthGuard)` en `public.assesment.resolver.ts` — 30 minutos.
+
+---
+
+## 2. ACCESO DIRECTO A RED INTERNA VÍA SERVICIOS EXPUESTOS
+
+**`SEVERITY: CRITICAL`**  
+**Repo:** `psira-docker`
+
+RStudio (`:8787`) y Shiny (`:3838`) están mapeados directamente al host sin pasar por Caddy. El backend está en las redes `frontend`, `backend`, `shiny` y `rstudio` simultáneamente — es el hub de todas las redes.
+
+**`docker-compose.yml`:**
+
+```yaml
+rstudio:
+  ports:
+    - "8787:8787"    # DIRECTO AL HOST — bypasea Caddy y toda autenticación
+
+shiny:
+  ports:
+    - "3838:3838"    # DIRECTO AL HOST — bypasea Caddy y toda autenticación
+```
+
+**Path de ataque completo:**
+
+```
+Internet → :8787 → RStudio (password: rstudioPassword, default)
+  → Ejecución arbitraria de R
+  → Red rstudio → mhira-backend (hub de todas las redes)
+  → Red backend → PostgreSQL / MongoDB / Redis (sin TLS interno)
+  → Sniffing de tráfico en plaintext
+  → PHI completa sin credenciales del sistema principal
+```
+
+Este path no requiere explotar ninguna vulnerabilidad de código — usa credenciales default y topología de red incorrecta.
+
+**Fix:** Eliminar port mappings de Shiny y RStudio en `docker-compose.yml`. Enrutar ambos por Caddy con autenticación básica. Dos líneas eliminadas.
+
+---
+
+## 3. CREDENCIALES DEFAULT — INVENTARIO DE AMBIENTES
+
+**`SEVERITY: CRITICAL`**  
+**Repos:** `psira-docker` + `psira-backend` + `psira-frontend`
+
+`env-example` contiene defaults que permiten compromiso total si se usan en producción:
+
+| Variable | Valor | Impacto si está en producción |
+|---|---|---|
+| `SUPERADMIN_PASSWORD` | `superadmin` | Acceso admin completo a todos los datos |
+| `JWT_SECRET` | `changeMe` | Forja de tokens arbitrarios, bypass total de auth |
+| `POSTGRES_PASSWORD` | `secret` | Acceso directo a todas las tablas con PHI |
+| `RSTUDIO_PASSWORD` | `rstudioPassword` | RCE + pivot a red interna |
+| `MONGODB_CONNECTION_STRING` | sin credenciales | Acceso sin auth a todos los assessments |
+
+Si `JWT_SECRET=changeMe` está activo en cualquier ambiente con datos reales, cualquiera puede forjar un token de superadmin ahora mismo:
+
+```javascript
+const jwt = require('jsonwebtoken');
+const token = jwt.sign(
+  { sub: '1', jti: 'any-uuid' },
+  'changeMe'  // JWT_SECRET del env-example
+);
+// Token válido 15 días, acceso de superadmin completo
+```
+
+> **Acción inmediata:** Inventario de todos los ambientes activos. Confirmar cuáles usan estos defaults. Esta respuesta define si el análisis describe riesgo futuro o un incidente activo.
+
+---
+
+## 4. SISTEMA DE SESIONES — ROTO EN AMBOS EXTREMOS
+
+**`SEVERITY: HIGH`**  
+**Repos:** `psira-backend` + `psira-frontend`
+
+Un único problema de diseño que se manifiesta en dos repos y que los audits individuales trataron por separado.
+
+### Backend — `src/modules/auth/providers/access-token.service.ts`
+
+Tokens JWT con vida de 15 días. Refresh tokens configurados estructuralmente pero nunca implementados:
+
+```typescript
+// authConfig.refreshTokenLife = 180 días — definido pero nunca usado
+// REFRESH_TOKEN_SECRET — cargado pero nunca referenciado en ningún lugar
+// No existe ningún mutation GraphQL de refresh
+// LoginResponseDto solo retorna accessToken, no refreshToken
+```
+
+### Frontend — `src/app/auth/auth.service.ts:60-62`
+
+Chequeo de expiración comentado. Logout borra el token del browser pero no lo revoca en el servidor:
+
+```typescript
+isLoggedIn() {
+  this.rePopulatePermissions();
+  const token = localStorage.getItem('auth_app_token');
+  if (token) return true;
+  // const isExpired = check if token is expired
+  // return !isExpired;   ← NUNCA IMPLEMENTADO
+}
+```
+
+**Resultado sistémico:** un token comprometido es válido por 15 días sin mecanismo de invalidación desde ninguno de los dos lados. No hay rotación, no hay revocación, no hay detección de uso anómalo.
+
+**Vector de extracción:** Angular 10.0.14 tiene CVE-2022-25763 (CVSS 9.1, expression injection → XSS). Con tokens en `localStorage` y XSS posible, el token extraído tiene dos semanas de vida útil.
+
+**Fix backend:** Completar implementación de refresh tokens. Agregar endpoint de revocación en logout.  
+**Fix frontend:** Descomentar y completar validación de expiración. Llamar endpoint de revocación en logout.
+
+---
+
+## 5. XSS VÍA noSanitize PIPE — HALLAZGO NUEVO
+
+**`SEVERITY: CRITICAL`**  
+**Repo:** `psira-frontend`
+
+Este hallazgo conecta directamente con la SQL injection del backend. El audit individual lo documentó pero el análisis anterior no cerró la cadena completa.
+
+**`src/app/@shared/pipes/nosanitize.pipe.ts:7-9`:**
+
+```typescript
+// Bypasea completamente la protección XSS de Angular
+transform(value: string): SafeHtml {
+  return this.sanitizer.bypassSecurityTrustHtml(value);
+}
+```
+
+Usado en `src/app/@shared/components/table/table.component.html:189,196` para renderizar contenido de celdas de tabla proveniente del backend.
+
+**Cadena de explotación cross-repo completa:**
+
+```
+SQL injection (backend) → datos maliciosos en DB
+→ noSanitize pipe los renderiza sin sanitizar
+→ XSS ejecuta en browser del clínico
+→ localStorage.getItem('auth_app_token') → token robado
+→ sesión válida 15 días sin revocación posible
+```
+
+**Fix:** Eliminar `nosanitize.pipe.ts` completamente. Usar sanitización por defecto de Angular o sanitizar en el servidor antes de enviar.
+
+---
+
+## 6. CLAVE DE CIFRADO EN BUNDLE PÚBLICO
+
+**`SEVERITY: HIGH`**  
+**Repos:** `psira-docker` + `psira-frontend`
+
+La misma clave aparece confirmada en dos lugares simultáneamente:
+
+**`env-example:111` (infra) — en el repositorio:**
+
+```bash
+FRONTEND_ENCRYPTION_KEY="hfsdjfhdufhiuegewurge8365746543785643785638276423874"
+```
+
+**`src/environments/environment.base.ts:15` (frontend) — compilada en el bundle JS descargable por cualquier usuario:**
+
+```typescript
+export const EnvironmentBase = {
+  secretKey: 'hfsdjfhdufhiuegewurge8365746543785643785638276423874',
+  // Usada en 21 archivos incluyendo:
+  // header.component.ts:68
+  // patients-list.component.ts:141
+  // patient-profile.component.ts
+};
+```
+
+`FRONTEND_ENCRYPTION_KEY` no aparece en `.env-sample` del backend. El backend no descifra nada con ella — es cifrado exclusivamente del lado del cliente. Con la clave en el bundle JS:
+
+- No hay confidencialidad contra observadores de red (TLS ya cubre esto).
+- No hay confidencialidad contra el servidor (genera y almacena los datos).
+- No hay confidencialidad contra quien tenga el bundle (la clave está ahí).
+
+El cifrado del lado del cliente sin un modelo de amenazas claro no protege contra ninguno de los vectores reales de este sistema.
+
+> **Acción:** Trazar todos los callsites de `crypto-js` en los 21 archivos. Evaluar si el modelo tiene justificación real. Rotar la clave si está en producción.
+
+---
+
+## 7. INCONSISTENCIAS CROSS-REPO
+
+**`SEVERITY: MEDIUM`**  
+**Repos:** `psira-docker` + `psira-backend` + `psira-frontend`
+
+### Variables de entorno desincronizadas
+
+| Variable | `env-example` (infra) | `.env-sample` (backend) | `environment.ts` (frontend) |
+|---|---|---|---|
+| `FRONTEND_ENCRYPTION_KEY` | ✅ línea 111 | ❌ ausente | ✅ hardcodeada como `secretKey` |
+| `JWT_SECRET` | ✅ `changeMe` | ✅ presente | N/A |
+| `REFRESH_TOKEN_SECRET` | ✅ presente | ✅ presente | N/A |
+| Redis password | ❌ ausente | ❌ ausente | N/A |
+
+La ausencia de Redis password en ambos repos confirma que Redis corre sin autenticación en todos los ambientes. Redis almacena `active-sessions:{tokenId}` — cualquier contenedor en la red backend puede leer y escribir sesiones sin credenciales.
+
+### Dos sistemas CI activos sin documentación
+
+`psira-frontend` y `psira-backend` tienen tanto `bitbucket-pipelines.yml` como `.github/workflows/`. No hay documentación de cuál es el sistema autoritativo. Las credenciales AWS/ECR de Bitbucket probablemente siguen activas — vector de acceso a infraestructura que nadie está monitoreando.
+
+### Inconsistencia de package managers
+
+Frontend usa `npm` (`package-lock.json`), backend usa `yarn` (`yarn.lock` con 3 años de antigüedad). Un `yarn install` en ambiente nuevo resuelve semver contra el registry actual, instalando potencialmente versiones distintas a las de producción.
+
+---
+
+## 8. INFRAESTRUCTURA DE BACKUP
+
+**`SEVERITY: HIGH`**  
+**Repo:** `psira-docker`
+
+Tasa de éxito de restore estimada: ~40%. Puntos de fallo documentados en el código:
+
+**`backup/crontab/daily-backup` — output a `/dev/null`:**
+
+```bash
+0 0 * * * /bin/backup > /dev/null 2>&1    # errores descartados silenciosamente
+30 0 * * * /bin/prune > /dev/null 2>&1    # fallos invisibles por semanas
+```
+
+**`backup/scripts/restore` — nombres hardcodeados + `--drop` sin validación:**
+
+```bash
+psql -h mhira-docker-postgres-1 ...
+# falla si el proyecto no se llama exactamente 'mhira-docker'
+
+mongorestore --host mhira-docker-mongo-1 --drop ...
+# --drop elimina datos actuales ANTES de verificar que el backup es válido
+```
+
+Si el archivo de backup está corrupto, `--drop` elimina los datos actuales antes de descubrir que no puede restaurar. Se pierden tanto el backup como los datos actuales, sin rollback posible.
+
+**Fix inmediato (2 horas):** Sacar output de `/dev/null`. Usar `docker-compose exec` en lugar de nombres hardcodeados. Verificar tamaño no-cero del archivo antes de ejecutar `--drop`.
+
+---
+
+## TABLA DE PRIORIDADES
+
+| # | Issue | Repos | Esfuerzo | Status |
+|---|---|---|---|---|
+| 0 | Activar logging estructurado | backend + infra | 1 día | `open` |
+| 1 | `@UseGuards()` en endpoint público | backend | 30 min | `open` |
+| 2 | Eliminar `noSanitize` pipe (XSS) | frontend | 30 min | `open` |
+| 3 | Cerrar puertos 3838 y 8787 | infra | 30 min | `open` |
+| 4 | Inventario de ambientes con defaults | todos | 1 día | `open` |
+| 5 | Validación de defaults en entrypoint | backend + infra | 2 horas | `open` |
+| 6 | Fix crítico de backups | infra | 2 horas | `open` |
+| 7 | Rotar `FRONTEND_ENCRYPTION_KEY` | frontend + infra | 2 horas | `open` |
+| 8 | Implementar revocación de tokens | backend + frontend | 1 semana | `open` |
+| 9 | Trazar callsites de `crypto-js` | frontend | 2 días | `open` |
+| 10 | Audit credenciales CI huérfanas | frontend + backend | 1 día | `open` |
+| 11 | Tests en paths críticos (prerequisito upgrades) | backend + frontend | 2-3 semanas | `open` |
+| 12 | Upgrades de dependencias | frontend + backend | post-tests | `open` |
+
+---
+
+## CONCLUSIÓN
+
+Los items 1–7 son correcciones de menos de un día cada una que eliminan los vectores de ataque más directos. El item 4 (inventario de ambientes) no es técnico pero determina si este análisis describe riesgo futuro o daño presente.
+
+El hallazgo nuevo de esta versión — la `noSanitize` pipe — cierra una cadena de explotación completa que los análisis anteriores no habían conectado: SQL injection en el backend produce datos maliciosos que el pipe renderiza sin sanitizar, ejecutando XSS que extrae tokens válidos por 15 días de `localStorage`.
+
+El patrón subyacente es consistente en los tres repos: código parcialmente implementado sin tests que lo detecten (`JWT error handling` comentado, `token expiration` comentado, refresh tokens configurados pero no implementados), defaults que nunca se cuestionaron, y migraciones que quedaron a medias. El problema de fondo no es ninguna vulnerabilidad específica — es la ausencia de un proceso que hubiera detectado cualquiera de estas cosas antes de llegar a producción.
