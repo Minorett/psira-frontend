@@ -1,34 +1,34 @@
 @import url("https://fonts.googleapis.com/css?family=Poppins:300,400,500,700");
 
-// app theme colors - EIPSI Forms Palette
+// app theme colors
 $app-dark: #373737;
-$app-green: #008080;
-$app-blue: #3B6CAA;
-$app-light-blue: #AED6F1;
+$app-green: #89d180;
+$app-blue: #258aa7;
+$app-light-blue: #f1f4ff;
 // Custom Color
 $custom-1: #fff !default;
 
 // Start with assigning color names to specific hex values.
 $white: #fff !default;
 $black: #000 !default;
-$red: #800000 !default;
+$red: #de4436 !default;
 $orange: #fa8c16 !default;
 $gold: #ffc107 !default;
-$green: #008080 !default;
-$blue: #3B6CAA !default;
+$green: #52c41a !default;
+$blue: #258aa7 !default;
 $cyan: #00c9a7 !default;
 $purple: #886cff !default;
 $magenta: #eb2f96 !default;
 $volcano: #fa541c !default;
 $lime: #a0d911 !default;
-$geekblue: #3B6CAA !default;
+$geekblue: #258aa7 !default;
 
-// Create grayscale - EIPSI Forms Palette
+// Create grayscale
 $gray-dark: #2a2a2a !default;
-$gray: #64748b !default;
-$gray-light: #94a3b8 !default;
-$gray-lighter: #e2e8f0 !default;
-$gray-lightest: #f1f5f9 !default;
+$gray: #53535f !default;
+$gray-light: #72849a !default;
+$gray-lighter: #ededed !default;
+$gray-lightest: #f1f2f3 !default;
 
 // Two Tones
 $tone-magenta: $magenta !default;
@@ -78,10 +78,10 @@ $tone-loop: (
   "purple" $tone-purple $tone-purple-light
 );
 
-// State Colors - EIPSI Forms Palette
-$brand-primary: $blue !default;
+// State Colors
+$brand-primary: $app-green !default;
 $brand-secondary: $purple !default;
-$brand-success: $green !default;
+$brand-success: $cyan !default;
 $brand-info: $blue !default;
 $brand-warning: $gold !default;
 $brand-danger: $red !default;
@@ -90,8 +90,8 @@ $brand-default: $gray-dark !default;
 // Body
 //
 // Settings for the `<body>` element.
-$body-bg: #f8f9fa !default;
-$body-color: #2c3e50 !default;
+$body-bg: #f9fbfd !default;
+$body-color: $gray !default;
 
 // Template
 //
@@ -116,9 +116,9 @@ $theme-color-loop: (
 // Links
 //
 // Style anchor elements.
-$link-color: #3B6CAA !default;
+$link-color: $blue !default;
 $link-decoration: none !default;
-$link-hover-color: #1E3A5F !default;
+$link-hover-color: darken($link-color, 15%) !default;
 $link-hover-decoration: underline !default;
 
 // Options
@@ -229,12 +229,12 @@ $lead-font-weight: 300 !default;
 
 $small-font-size: 80% !default;
 
-$text-muted: #64748b !default;
+$text-muted: rgba($gray-light, 0.7) !default;
 
 // Border
 //
 // Define border properties
-$border-color: #e2e8f0 !default;
+$border-color: #edf2f9 !default;
 $border-radius: 0.25rem !default;
 $border-radius-lg: 0.3rem !default;
 $border-radius-sm: 0.2rem !default;
@@ -311,25 +311,25 @@ $table-border-radius: 4px !default;
 $table-column-sorter-size: 0.9375rem;
 $table-row-expand-icon-size: 1.0625rem !default;
 
-// Form states and alerts - EIPSI Forms Palette
+// Form states and alerts
 //
 // Define colors for institutionForm feedback states and, by default, alerts.
-$state-success-text: #008080 !default;
-$state-success-bg: #e8f5e9 !default;
-$state-success-border: rgba(#008080, 0.15) !default;
+$state-success-text: $brand-success !default;
+$state-success-bg: rgba($brand-success, 0.1) !default;
+$state-success-border: rgba($brand-success, 0.15) !default;
 
-$state-info-text: #3B6CAA !default;
-$state-info-bg: #f0f6fc !default;
-$state-info-border: rgba(#3B6CAA, 0.15) !default;
+$state-info-text: $brand-info !default;
+$state-info-bg: rgba($brand-info, 0.1) !default;
+$state-info-border: rgba($brand-info, 0.15) !default;
 
-$state-warning-text: #ffc107 !default;
-$state-warning-bg: #fff8e5 !default;
+$state-warning-text: $brand-warning !default;
+$state-warning-bg: rgba($brand-warning, 0.1) !default;
 $mark-bg: $state-warning-bg !default;
-$state-warning-border: rgba(#ffc107, 0.15) !default;
+$state-warning-border: rgba($brand-warning, 0.15) !default;
 
-$state-danger-text: #800000 !default;
-$state-danger-bg: #fff5f5 !default;
-$state-danger-border: rgba(#800000, 0.15) !default;
+$state-danger-text: $brand-danger !default;
+$state-danger-bg: rgba($brand-danger, 0.1) !default;
+$state-danger-border: rgba($brand-danger, 0.15) !default;
 
 $alert-padding-x: 0.9375rem !default;
 $alert-padding-y: 0.5rem !default;
